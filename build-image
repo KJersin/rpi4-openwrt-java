@@ -1,0 +1,105 @@
+#!/bin/bash
+
+##
+# Program arguments
+##
+VERSION=22.03.5
+ROOTFS_PARTSIZE=520
+JAVA_VERSION=17
+OPENJDK_VERSION=openjdk${JAVA_VERSION}
+IMAGE_JAVA_HOME=/usr/lib/jvm/java-${JAVA_VERSION}-openjdk
+
+##
+# Version and image URL:
+# Information about the latest image https://firmware-selector.openwrt.org/?target=bcm27xx%2Fbcm2711&id=rpi-4
+##
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+FILES=$SCRIPT_DIR/files
+RELEASE_URL_TARGETS=https://downloads.openwrt.org/releases/${VERSION}/targets/bcm27xx/bcm2711
+IMAGE_BUILDER_BASE=openwrt-imagebuilder-${VERSION}-bcm27xx-bcm2711.Linux-x86_64
+IMAGE_BUILDER_DIR=$SCRIPT_DIR/imagebuilder
+IMAGE_BUILDER_CMDLINE_TXT=$IMAGE_BUILDER_DIR/target/linux/bcm27xx/image/cmdline.txt
+IMAGE_BUILDER_DISTROS_DIR=$IMAGE_BUILDER_DIR/distros
+
+##
+# function: Get list of files from a html dir listening page
+##
+url_ls() {
+    wget -q -O - "$1" | \
+        grep -o '<a .*href=.*>' | \
+        sed -e 's/<a /\n<a /g' | \
+        sed -e 's/<a .*href=['"'"'"]//' -e 's/["'"'"'].*$//' -e '/^$/ d'
+}
+
+##
+# Alpine distro
+##
+ALPINE_URL=https://dl-cdn.alpinelinux.org/alpine/latest-stable/community/aarch64
+JAVA_BUILDER_DIR=$IMAGE_BUILDER_DISTROS_DIR/alpine-latest-stable/java
+
+##
+# Download the Image builder
+##
+if [[ ! -d "$IMAGE_BUILDER_DIR" ]]
+then
+    echo "Downloading image builder ($VERSION)..."
+    mkdir -p "$IMAGE_BUILDER_DIR"
+    wget -nv -O - "$RELEASE_URL_TARGETS/$IMAGE_BUILDER_BASE.tar.xz"\
+      | tar -Jx -C "$IMAGE_BUILDER_DIR" --strip-components=1 -f -
+    echo -e
+fi
+
+##
+# Download the alpine java files
+##
+if [[ ! -d "$JAVA_BUILDER_DIR" ]]
+then
+    echo "Downloading java packages ($OPENJDK_VERSION)..."
+    mkdir -p "$JAVA_BUILDER_DIR"
+    for package in $( url_ls "$ALPINE_URL" | grep "$OPENJDK_VERSION" )
+    do
+        if ! wget -nv -O "$JAVA_BUILDER_DIR/${package}" "${ALPINE_URL}/${package}" ; then
+            printf "*** Unable to retrieve java package: %s\n\n" "$package" && exit 1
+        fi
+    done
+    echo -e
+fi
+
+##
+# Unpack the Java files
+##
+rm -rf "${FILES:?}"
+mkdir -p "$FILES"
+for package in "$JAVA_BUILDER_DIR"/*
+do
+    echo "$package"
+    tar -xzf "$package"\
+        --exclude .PKGINFO\
+        --exclude '.SIGN.RSA.*'\
+        -C "$FILES" 2>/dev/null
+done
+
+##
+# Add java to the path by means of a profile.d file
+##
+# Default java as a symbolic link
+(   
+    cd "${FILES}/usr/lib/jvm" || exit 1
+    ln -s "${IMAGE_JAVA_HOME}" "default"
+)
+
+# The profile configuration
+mkdir -p "$FILES/etc/profile.d"
+cat << EOF > "$FILES/etc/profile.d/java.sh"
+export JAVA_HOME=/usr/lib/jvm/default
+export PATH="\$PATH:\$JAVA_HOME/bin"
+EOF
+
+##
+# Let the image builder do it's job
+##
+make -C "$IMAGE_BUILDER_DIR"\
+    ROOTFS_PARTSIZE="$ROOTFS_PARTSIZE"\
+    FILES="$FILES"\
+    PACKAGES="libxml2 libstdcpp6 libjpeg-turbo libnss"\
+    image

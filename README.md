@@ -33,6 +33,14 @@ OpenJDK Runtime Environment (build 17.0.8+7-alpine-r0)
 OpenJDK 64-Bit Server VM (build 17.0.8+7-alpine-r0, mixed mode, sharing)
 ```
 
-### Build options
-
-_I'm current working on a couple of small enhancements to the script. Ie. boot from USB device and change the fixed IP configuration to using DHCP instead._
+### Build options  
+```
+Usage: ./build-image [options]
+Options:
+  -p PROFILE              [server|router] (default: router)
+                          server: dhcp will be used for IP allocation
+                          router: standard out-of-the-box Openwrt settings
+  -r ROOT_DEV             Root file systems device (default: /dev/mmcblk0p2)
+                          /dev/mmcblk0p2 : sd-card or eMMC
+                          /dev/sda2      : usb disk
+```

@@ -9,6 +9,31 @@ ROOTFS_PARTSIZE=400
 OPENJDK_VERSION=openjdk${JAVA_VERSION}
 IMAGE_JAVA_HOME=/usr/lib/jvm/java-${JAVA_VERSION}-openjdk
 
+usage() {
+    [ -n "$1" ] && echo -e "$1" >&2
+    cat << EOF >&2
+Usage: $0 [options]
+Options:
+  -p PROFILE              [server|router] (default: router)
+                          server: dhcp will be used for IP allocation
+                          router: standard out-of-the-box Openwrt settings
+  -r ROOT_DEV             Root file systems device (default: /dev/mmcblk0p2)
+                          /dev/mmcblk0p2 : sd-card or eMMC
+                          /dev/sda2      : usb disk
+
+EOF
+}
+
+while getopts ":p:r:h" opt ; do
+    case "${opt}" in
+        p) PROFILE=${OPTARG} ;;
+        r) ROOT_DEV=${OPTARG} ;;
+        h) usage ; exit ;;
+        *) usage "*** Unknown argument $OPTARG" ; exit ;;
+    esac
+done
+shift $((OPTIND-1))
+
 ##
 # Version and image URL:
 # Information about the latest image https://firmware-selector.openwrt.org/?target=bcm27xx%2Fbcm2711&id=rpi-4
@@ -22,6 +47,28 @@ IMAGE_BUILDER_CMDLINE_TXT=$IMAGE_BUILDER_DIR/target/linux/bcm27xx/image/cmdline.
 IMAGE_BUILDER_DISTROS_DIR=$IMAGE_BUILDER_DIR/distros
 
 ##
+# Alpine distro
+##
+ALPINE_URL=https://dl-cdn.alpinelinux.org/alpine/latest-stable/community/aarch64
+JAVA_BUILDER_DIR=$IMAGE_BUILDER_DISTROS_DIR/alpine-latest-stable/java
+
+##
+# Download the Image builder
+##
+if [[ ! -f "$IMAGE_BUILDER_DIR/.version-marker" \
+    || "${IMAGE_BUILDER_BASE}-${OPENJDK_VERSION}" != "$(cat "$IMAGE_BUILDER_DIR/.version-marker")" ]]
+then
+    rm -rf "${IMAGE_BUILDER_DIR:?}"
+fi
+if [[ ! -d "$IMAGE_BUILDER_DIR" ]] ; then
+    echo "Downloading image builder ($VERSION)..."
+    mkdir -p "$IMAGE_BUILDER_DIR"
+    wget -nv -O - "$RELEASE_URL_TARGETS/$IMAGE_BUILDER_BASE.tar.xz"\
+      | tar -Jx -C "$IMAGE_BUILDER_DIR" --strip-components=1 -f -
+    echo -e
+fi
+
+##
 # function: Get list of files from a html dir listening page
 ##
 url_ls() {
@@ -32,26 +79,11 @@ url_ls() {
 }
 
 ##
-# Alpine distro
-##
-ALPINE_URL=https://dl-cdn.alpinelinux.org/alpine/latest-stable/community/aarch64
-JAVA_BUILDER_DIR=$IMAGE_BUILDER_DISTROS_DIR/alpine-latest-stable/java
-
-##
-# Download the Image builder
-##
-if [[ ! -d "$IMAGE_BUILDER_DIR" ]]
-then
-    echo "Downloading image builder ($VERSION)..."
-    mkdir -p "$IMAGE_BUILDER_DIR"
-    wget -nv -O - "$RELEASE_URL_TARGETS/$IMAGE_BUILDER_BASE.tar.xz"\
-      | tar -Jx -C "$IMAGE_BUILDER_DIR" --strip-components=1 -f -
-    echo -e
-fi
-
-##
 # Download the alpine java files
 ##
+if [ ! -f "$JAVA_BUILDER_DIR/$( url_ls "$ALPINE_URL" | grep "${OPENJDK_VERSION}-${JAVA_VERSION}" )" ] ; then
+    rm -rf "${JAVA_BUILDER_DIR:?}"
+fi
 if [[ ! -d "$JAVA_BUILDER_DIR" ]]
 then
     echo "Downloading java packages ($OPENJDK_VERSION)..."
@@ -70,6 +102,7 @@ fi
 ##
 rm -rf "${FILES:?}"
 mkdir -p "$FILES"
+echo "Installing $OPENJDK_VERSION"
 for package in "$JAVA_BUILDER_DIR"/*
 do
     echo "$package"
@@ -81,14 +114,12 @@ done
 
 ##
 # Add java to the path by means of a profile.d file
-##
 # Default java as a symbolic link
+##
 (   
     cd "${FILES}/usr/lib/jvm" || exit 1
     ln -s "${IMAGE_JAVA_HOME}" "default"
 )
-
-# The profile configuration
 mkdir -p "$FILES/etc/profile.d"
 cat << EOF > "$FILES/etc/profile.d/java.sh"
 export JAVA_HOME=/usr/lib/jvm/default
@@ -96,10 +127,41 @@ export PATH="\$PATH:\$JAVA_HOME/bin"
 EOF
 
 ##
+# Optional settings
+##
+if [ "$PROFILE" == "server" ] ; then
+    echo "Using dhcp"
+    mkdir -p "$FILES/etc"
+    cp -r "$SCRIPT_DIR/uci-defaults" "$FILES/etc"
+fi
+if [[ -n "$ROOT_DEV" && ! -f "$IMAGE_BUILDER_CMDLINE_TXT" ]] ; then
+    echo "*** Unable to locate cmdline.txt"
+    echo "*** So assuming that this is not at RPI4 device"
+    echo "*** but then I don't no how to set the root device"
+    exit 1
+fi
+if [ -f "$IMAGE_BUILDER_CMDLINE_TXT" ] ; then
+    [ -z "$ROOT_DEV" ] && ROOT_DEV=/dev/mmcblk0p2
+    cat << EOF > "$IMAGE_BUILDER_CMDLINE_TXT"
+console=serial0,115200 console=tty1 root=$ROOT_DEV rootfstype=squashfs,ext4 rootwait
+EOF
+fi
+
+##
+# If root device is any thing but the default mmc device than assume usb
+# and draw in the USB needed packages
+##
+if [ "$ROOT_DEV" != "/dev/mmcblk0p2" ] ; then
+    USB_STORAGE_MODULES="lsblk block-mount e2fsprogs kmod-fs-ext4 kmod-usb-storage kmod-usb2 kmod-usb3"
+fi
+
+##
 # Let the image builder do it's job
 ##
 make -C "$IMAGE_BUILDER_DIR"\
     ROOTFS_PARTSIZE="$ROOTFS_PARTSIZE"\
     FILES="$FILES"\
-    PACKAGES="libxml2 libstdcpp6 libjpeg-turbo libnss"\
+    PACKAGES="libxml2 libstdcpp6 libjpeg-turbo libnss $USB_STORAGE_MODULES"\
     image
+
+echo -n "${IMAGE_BUILDER_BASE}-${OPENJDK_VERSION}" > "$IMAGE_BUILDER_DIR/.version-marker"

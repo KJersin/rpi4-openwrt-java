@@ -69,7 +69,6 @@ if [[ ! -d "$IMAGE_BUILDER_DIR" ]] ; then
 fi
 
 ##
-# Download the alpine java files
 # function: Get list of files from a html dir listening page
 ##
 url_ls() {
@@ -79,6 +78,12 @@ url_ls() {
         sed -e 's/<a .*href=['"'"'"]//' -e 's/["'"'"'].*$//' -e '/^$/ d'
 }
 
+##
+# Download the alpine java files
+##
+if [ ! -f "$JAVA_BUILDER_DIR/$( url_ls "$ALPINE_URL" | grep "${OPENJDK_VERSION}-${JAVA_VERSION}" )" ] ; then
+    rm -rf "${JAVA_BUILDER_DIR:?}"
+fi
 if [[ ! -d "$JAVA_BUILDER_DIR" ]]
 then
     echo "Downloading java packages ($OPENJDK_VERSION)..."
@@ -97,6 +102,7 @@ fi
 ##
 rm -rf "${FILES:?}"
 mkdir -p "$FILES"
+echo "Installing $OPENJDK_VERSION"
 for package in "$JAVA_BUILDER_DIR"/*
 do
     echo "$package"

@@ -55,8 +55,12 @@ JAVA_BUILDER_DIR=$IMAGE_BUILDER_DISTROS_DIR/alpine-latest-stable/java
 ##
 # Download the Image builder
 ##
-if [[ ! -d "$IMAGE_BUILDER_DIR" ]]
+if [[ ! -f "$IMAGE_BUILDER_DIR/.version-marker" \
+    || "${IMAGE_BUILDER_BASE}-${OPENJDK_VERSION}" != "$(cat "$IMAGE_BUILDER_DIR/.version-marker")" ]]
 then
+    rm -rf "${IMAGE_BUILDER_DIR:?}"
+fi
+if [[ ! -d "$IMAGE_BUILDER_DIR" ]] ; then
     echo "Downloading image builder ($VERSION)..."
     mkdir -p "$IMAGE_BUILDER_DIR"
     wget -nv -O - "$RELEASE_URL_TARGETS/$IMAGE_BUILDER_BASE.tar.xz"\
@@ -153,3 +157,5 @@ make -C "$IMAGE_BUILDER_DIR"\
     FILES="$FILES"\
     PACKAGES="libxml2 libstdcpp6 libjpeg-turbo libnss $USB_STORAGE_MODULES"\
     image
+
+echo -n "${IMAGE_BUILDER_BASE}-${OPENJDK_VERSION}" > "$IMAGE_BUILDER_DIR/.version-marker"
